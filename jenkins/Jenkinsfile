@@ -1,0 +1,223 @@
+pipeline {
+    agent any
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        skipDefaultCheckout(true)
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+    }
+    parameters {
+        string(name: 'APP_SOURCE_REPO', defaultValue: 'https://github.com/dockersamples/example-voting-app.git', description: 'Application repository')
+        string(name: 'APP_BRANCH', defaultValue: 'main', description: 'Application branch')
+        booleanParam(name: 'DEPLOY_TO_EKS', defaultValue: true, description: 'Deploy to existing EKS cluster')
+    }
+    environment {
+        AWS_REGION = 'ap-south-1'
+        EKS_CLUSTER_NAME = 'k8s-session'
+        ECR_PREFIX = 'votingapp'
+        K8S_NAMESPACE = 'votingapp'
+        SONAR_HOST_URL = 'http://SONARQUBE_PRIVATE_DNS_OR_IP:9000'
+        SONAR_TOKEN_CREDENTIAL = 'sonarqube-token'
+        DB_PASSWORD_CREDENTIAL = 'postgres-db-password'
+        APP_DIR = 'app'
+        KUBECONFIG = "${WORKSPACE}/.kube/eks-config"
+    }
+    stages {
+        stage('Checkout Pipeline Repository') {
+            steps {
+                // Required because skipDefaultCheckout(true) is enabled.
+                // This checks out Jenkinsfile and kubernetes/eks manifests.
+                checkout scm
+            }
+        }
+        stage('Preflight') {
+            steps {
+                sh '''
+                    set -e
+                    for tool in aws docker kubectl git sonar-scanner; do
+                      command -v "$tool" >/dev/null || { echo "Missing tool: $tool"; exit 1; }
+                    done
+                    aws sts get-caller-identity
+                    docker version
+                    docker buildx version
+                    kubectl version --client
+                    sonar-scanner --version
+                    curl --fail --silent --show-error "$SONAR_HOST_URL/api/system/status"
+                '''
+            }
+        }
+        stage('Checkout Application') {
+            steps {
+                dir("${APP_DIR}") {
+                    git branch: "${params.APP_BRANCH}", url: "${params.APP_SOURCE_REPO}"
+                }
+                sh '''
+                    set -e
+                    for component in vote result worker; do
+                      test -f "$APP_DIR/$component/Dockerfile" || {
+                        echo "Missing $APP_DIR/$component/Dockerfile"; exit 1;
+                      }
+                    done
+                '''
+            }
+        }
+        stage('SonarQube - Vote') {
+            steps {
+                withCredentials([string(credentialsId: "${SONAR_TOKEN_CREDENTIAL}", variable: 'SONAR_TOKEN')]) {
+                    dir("${APP_DIR}/vote") {
+                        sh '''
+                            set -e
+                            sonar-scanner \
+                              -Dsonar.projectKey=voting-app-vote \
+                              -Dsonar.projectName="Voting App - Vote" \
+                              -Dsonar.sources=. \
+                              -Dsonar.host.url="$SONAR_HOST_URL" \
+                              -Dsonar.token="$SONAR_TOKEN" \
+                              -Dsonar.qualitygate.wait=true
+                        '''
+                    }
+                }
+            }
+        }
+        stage('SonarQube - Result') {
+            steps {
+                withCredentials([string(credentialsId: "${SONAR_TOKEN_CREDENTIAL}", variable: 'SONAR_TOKEN')]) {
+                    dir("${APP_DIR}/result") {
+                        sh '''
+                            set -e
+                            sonar-scanner \
+                              -Dsonar.projectKey=voting-app-result \
+                              -Dsonar.projectName="Voting App - Result" \
+                              -Dsonar.sources=. \
+                              -Dsonar.host.url="$SONAR_HOST_URL" \
+                              -Dsonar.token="$SONAR_TOKEN" \
+                              -Dsonar.qualitygate.wait=true
+                        '''
+                    }
+                }
+            }
+        }
+        stage('Prepare ECR') {
+            steps {
+                script {
+                    env.AWS_ACCOUNT_ID = sh(
+                        script: "aws sts get-caller-identity --query Account --output text",
+                        returnStdout: true
+                    ).trim()
+                    env.ECR_REGISTRY = "${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com"
+                    env.IMAGE_TAG = "build-${env.BUILD_NUMBER}"
+                    env.VOTE_IMAGE = "${env.ECR_REGISTRY}/${env.ECR_PREFIX}-vote:${env.IMAGE_TAG}"
+                    env.RESULT_IMAGE = "${env.ECR_REGISTRY}/${env.ECR_PREFIX}-result:${env.IMAGE_TAG}"
+                    env.WORKER_IMAGE = "${env.ECR_REGISTRY}/${env.ECR_PREFIX}-worker:${env.IMAGE_TAG}"
+                }
+                sh '''
+                    set -e
+                    for component in vote result worker; do
+                      repository="${ECR_PREFIX}-${component}"
+                      if ! aws ecr describe-repositories --repository-names "$repository" --region "$AWS_REGION" >/dev/null 2>&1; then
+                        aws ecr create-repository --repository-name "$repository" --region "$AWS_REGION" --image-scanning-configuration scanOnPush=true
+                      fi
+                    done
+                    aws ecr get-login-password --region "$AWS_REGION" |
+                      docker login --username AWS --password-stdin "$ECR_REGISTRY"
+                '''
+            }
+        }
+        stage('Build and Push Multi-Architecture Images') {
+            steps {
+                sh '''
+                    set -e
+                    docker buildx inspect votingapp-builder >/dev/null 2>&1 || \
+                      docker buildx create --name votingapp-builder --driver docker-container
+                    docker buildx use votingapp-builder
+                    docker buildx inspect --bootstrap
+
+                    # Register QEMU handlers for cross-platform builds on the EC2 builder.
+                    docker run --privileged --rm tonistiigi/binfmt --install arm64,amd64
+
+                    docker buildx build --platform linux/amd64,linux/arm64 --push \
+                      --tag "$VOTE_IMAGE" "$APP_DIR/vote"
+                    docker buildx build --platform linux/amd64,linux/arm64 --push \
+                      --tag "$RESULT_IMAGE" "$APP_DIR/result"
+                    docker buildx build --platform linux/amd64,linux/arm64 --push \
+                      --tag "$WORKER_IMAGE" "$APP_DIR/worker"
+
+                    docker buildx imagetools inspect "$VOTE_IMAGE"
+                    docker buildx imagetools inspect "$RESULT_IMAGE"
+                    docker buildx imagetools inspect "$WORKER_IMAGE"
+                '''
+            }
+        }
+        stage('Configure EKS Access') {
+            when { expression { params.DEPLOY_TO_EKS } }
+            steps {
+                sh '''
+                    set -e
+                    mkdir -p "$(dirname "$KUBECONFIG")"
+                    aws eks describe-cluster --region "$AWS_REGION" --name "$EKS_CLUSTER_NAME" \
+                      --query 'cluster.{name:name,status:status,version:version}' --output table
+                    aws eks update-kubeconfig --region "$AWS_REGION" --name "$EKS_CLUSTER_NAME" --kubeconfig "$KUBECONFIG"
+                    kubectl config current-context
+                    kubectl get nodes -o wide
+                '''
+            }
+        }
+        stage('Create Namespace and DB Secret') {
+            when { expression { params.DEPLOY_TO_EKS } }
+            steps {
+                sh 'kubectl apply -f kubernetes/eks/00-namespace.yaml'
+                withCredentials([string(credentialsId: "${DB_PASSWORD_CREDENTIAL}", variable: 'POSTGRES_PASSWORD')]) {
+                    sh '''
+                        set +x
+                        kubectl create secret generic db-credentials \
+                          --namespace "$K8S_NAMESPACE" \
+                          --from-literal=POSTGRES_USER=postgres \
+                          --from-literal=POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+                          --dry-run=client -o yaml | kubectl apply -f -
+                    '''
+                }
+            }
+        }
+        stage('Deploy to EKS') {
+            when { expression { params.DEPLOY_TO_EKS } }
+            steps {
+                sh '''
+                    set -e
+                    kubectl apply -f kubernetes/eks/01-postgres.yaml
+                    kubectl apply -f kubernetes/eks/02-redis.yaml
+                    kubectl apply -f kubernetes/eks/03-vote.yaml
+                    kubectl apply -f kubernetes/eks/04-result.yaml
+                    kubectl apply -f kubernetes/eks/05-worker.yaml
+
+                    kubectl set image deployment/voting-app-deploy vote="$VOTE_IMAGE" -n "$K8S_NAMESPACE"
+                    kubectl set image deployment/result-app-deploy result="$RESULT_IMAGE" -n "$K8S_NAMESPACE"
+                    kubectl set image deployment/worker-deploy worker="$WORKER_IMAGE" -n "$K8S_NAMESPACE"
+                '''
+            }
+        }
+        stage('Verify Rollouts') {
+            when { expression { params.DEPLOY_TO_EKS } }
+            steps {
+                sh '''
+                    set -e
+                    for deployment in postgres-deploy redis-deploy voting-app-deploy result-app-deploy worker-deploy; do
+                      kubectl rollout status "deployment/$deployment" -n "$K8S_NAMESPACE" --timeout=300s
+                    done
+                    kubectl get deployments,pods,services -n "$K8S_NAMESPACE" -o wide
+                '''
+            }
+        }
+    }
+    post {
+        success { echo 'Source analysis, ECR publishing and EKS deployment completed.' }
+        failure { echo 'Pipeline failed. Review the first failed stage in Console Output.' }
+        always {
+            sh '''
+                if [ -n "${ECR_REGISTRY:-}" ]; then
+                  docker logout "$ECR_REGISTRY" >/dev/null 2>&1 || true
+                fi
+            '''
+            echo "Build ${BUILD_NUMBER}: ${currentBuild.currentResult}"
+        }
+    }
+}

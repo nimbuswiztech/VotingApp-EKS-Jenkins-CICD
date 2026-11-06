@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Voting App EKS CI/CD — Student Guide</title>
+<style>
+:root{--ink:#172033;--muted:#5d687c;--line:#dce3ed;--blue:#1d4ed8;--green:#047857}
+*{box-sizing:border-box}body{margin:0;background:#f4f7fb;color:var(--ink);font:16px/1.65 system-ui,Arial,sans-serif}
+header{background:#111d38;color:white;padding:42px max(22px,calc((100% - 1120px)/2))}
+header h1{font-size:clamp(28px,4vw,44px);line-height:1.12;margin:10px 0}
+header p{max-width:900px;color:#d5def0}.tag{display:inline-block;border:1px solid #687a9b;border-radius:30px;padding:3px 10px;margin:4px;font-size:13px}
+.layout{max-width:1160px;margin:24px auto;padding:0 18px;display:grid;grid-template-columns:235px minmax(0,1fr);gap:22px}
+nav{position:sticky;top:12px;align-self:start;background:white;border:1px solid var(--line);border-radius:12px;padding:16px;max-height:calc(100vh - 24px);overflow:auto}
+nav a{display:block;color:#234574;text-decoration:none;padding:5px 0;font-size:14px}
+section{background:white;border:1px solid var(--line);border-radius:13px;padding:22px;margin-bottom:18px}
+h2{margin:0 0 13px;font-size:24px}h3{font-size:18px;margin:20px 0 8px}
+.note,.warn,.good{padding:12px 15px;margin:14px 0;border-radius:7px}
+.note{background:#eff6ff;border-left:4px solid #2563eb}.warn{background:#fffbeb;border-left:4px solid #d97706}.good{background:#ecfdf5;border-left:4px solid #059669}
+pre{background:#111827;color:#e5e7eb;padding:15px;border-radius:9px;overflow:auto;font-size:13px;line-height:1.55}
+code{font-family:ui-monospace,Consolas,monospace}table{border-collapse:collapse;width:100%;font-size:14px;margin:12px 0}
+td,th{border:1px solid var(--line);padding:8px;text-align:left;vertical-align:top}th{background:#eef2f8}
+.diagram{background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px;overflow:auto}
+.muted{color:var(--muted)}footer{max-width:1120px;margin:auto;padding:0 20px 35px;color:var(--muted);font-size:13px}
+@media(max-width:850px){.layout{grid-template-columns:1fr}nav{position:relative;max-height:none}}
+</style></head><body>
+<header><div>HANDS-ON DEVOPS TRAINING · AWS</div>
+<h1>End-to-End CI/CD with Jenkins, SonarQube, ECR & Amazon EKS</h1>
+<p>Build and deploy the Docker Samples Voting App using Jenkins on one EC2 instance, SonarQube on another EC2 instance, Amazon ECR and an existing EKS cluster.</p>
+<span class="tag">Jenkins EC2</span><span class="tag">SonarQube EC2</span><span class="tag">EKS k8s-session</span><span class="tag">ap-south-1</span>
+</header>
+<div class="layout"><nav><b>Contents</b>
+<a href="#overview">1. Overview</a><a href="#architecture">2. Architecture</a><a href="#dataflow">3. App data flow</a><a href="#prereq">4. Prerequisites</a><a href="#network">5. Network rules</a><a href="#jenkins">6. Jenkins EC2</a><a href="#sonar">7. SonarQube EC2</a><a href="#iam">8. IAM and EKS access</a><a href="#files">9. Project files</a><a href="#manual">10. Manual deployment</a><a href="#pipeline">11. Pipeline stages</a><a href="#job">12. Jenkins job</a><a href="#verify">13. Verify application</a><a href="#trouble">14. Troubleshooting</a><a href="#cleanup">15. Cleanup</a>
+</nav><main>
+<section id="overview"><h2>1. Project overview</h2>
+<table><tr><th>Resource</th><th>Sample value</th></tr><tr><td>Jenkins EC2</td><td>jenkins-ec2</td></tr><tr><td>SonarQube EC2</td><td>sonarqube-ec2</td></tr><tr><td>EKS cluster</td><td>k8s-session</td></tr><tr><td>Region</td><td>ap-south-1</td></tr><tr><td>Namespace</td><td>votingapp</td></tr><tr><td>ECR repos</td><td>votingapp-vote, votingapp-result, votingapp-worker</td></tr></table>
+<div class="warn"><b>Reference note:</b> The requested Nimbuswiztech GitHub folder could not be fetched during generation. This kit includes a consistent sample manifest set for the same Vote/Redis/Worker/PostgreSQL/Result architecture. Compare it with the exact files in <a href="https://github.com/nimbuswiztech/Kubernetes/tree/main/Votingapp-Deployment">Votingapp-Deployment</a> before applying to a shared cluster.</div>
+</section>
+<section id="architecture"><h2>2. Final CI/CD architecture</h2><div class="diagram">
+<svg viewBox="0 0 940 570" width="100%" role="img" aria-label="GitHub to Jenkins, SonarQube, ECR and EKS architecture">
+<defs><marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0 0L6 3L0 6" fill="none" stroke="#50627d" stroke-width="1.3"/></marker></defs>
+<rect x="20" y="25" width="170" height="65" rx="10" fill="#e8efff" stroke="#5276bd"/><text x="105" y="52" text-anchor="middle" font-size="16" font-weight="bold">GitHub</text><text x="105" y="72" text-anchor="middle" font-size="12">Source + pipeline</text>
+<rect x="270" y="25" width="230" height="90" rx="10" fill="#e8efff" stroke="#5276bd"/><text x="385" y="54" text-anchor="middle" font-size="17" font-weight="bold">Jenkins EC2</text><text x="385" y="75" text-anchor="middle" font-size="12">Checkout · Scanner · Buildx</text><text x="385" y="94" text-anchor="middle" font-size="12">AWS CLI · kubectl</text>
+<rect x="680" y="25" width="230" height="90" rx="10" fill="#e9f8f1" stroke="#23845c"/><text x="795" y="55" text-anchor="middle" font-size="17" font-weight="bold">SonarQube EC2</text><text x="795" y="78" text-anchor="middle" font-size="12">Analysis + quality gate</text>
+<path d="M190 58H270 M500 70H680" stroke="#50627d" stroke-width="2" marker-end="url(#arr)"/><text x="590" y="57" text-anchor="middle" font-size="12">Private TCP 9000</text>
+<rect x="270" y="175" width="230" height="78" rx="10" fill="#fff5df" stroke="#b78322"/><text x="385" y="207" text-anchor="middle" font-size="17" font-weight="bold">Amazon ECR</text><text x="385" y="230" text-anchor="middle" font-size="12">Vote · Result · Worker</text>
+<path d="M385 115V175" stroke="#50627d" stroke-width="2" marker-end="url(#arr)"/>
+<rect x="90" y="320" width="760" height="220" rx="16" fill="#f4f8ff" stroke="#5276bd" stroke-width="2"/><text x="470" y="350" text-anchor="middle" font-size="20" font-weight="bold">Amazon EKS · k8s-session · votingapp</text>
+<g fill="#e9f8f1" stroke="#23845c"><rect x="135" y="385" width="125" height="90" rx="9"/><rect x="300" y="385" width="125" height="90" rx="9"/><rect x="465" y="385" width="125" height="90" rx="9"/><rect x="630" y="385" width="125" height="90" rx="9"/><rect x="765" y="385" width="70" height="90" rx="9"/></g>
+<g fill="#145b3c" text-anchor="middle"><text x="197" y="420" font-size="15" font-weight="bold">Vote</text><text x="197" y="443" font-size="12">Frontend</text><text x="362" y="420" font-size="15" font-weight="bold">Redis</text><text x="362" y="443" font-size="12">Queue</text><text x="527" y="420" font-size="15" font-weight="bold">Worker</text><text x="527" y="443" font-size="12">.NET</text><text x="692" y="420" font-size="15" font-weight="bold">PostgreSQL</text><text x="692" y="443" font-size="12">Database</text><text x="800" y="420" font-size="14" font-weight="bold">Result</text><text x="800" y="443" font-size="11">UI</text></g>
+<path d="M260 430H300 M425 430H465 M590 430H630 M755 430H765 M385 253V290H470V320" stroke="#50627d" stroke-width="2" marker-end="url(#arr)"/>
+<text x="470" y="515" text-anchor="middle" font-size="12" fill="#50627d">EKS worker nodes pull images from ECR using node IAM permissions</text>
+</svg></div>
+<p><b>Pipeline:</b> GitHub → Jenkins EC2 → SonarQube EC2 → Docker Buildx → ECR → EKS.</p></section>
+<section id="dataflow"><h2>3. Application data flow</h2><p>Browser → Vote (Python) → Redis → Worker (.NET) → PostgreSQL → Result (Node.js). Redis and PostgreSQL are internal ClusterIP Services. Vote and Result are also ClusterIP in this lab.</p></section>
+<section id="prereq"><h2>4. Prerequisites</h2><ul><li>Existing EKS cluster active and worker nodes Ready.</li><li>Jenkins EC2 has Java, Jenkins, Git, Docker Engine/Buildx, AWS CLI v2, kubectl and SonarScanner.</li><li>SonarQube EC2 reachable privately from Jenkins on TCP 9000.</li><li>Jenkins EC2 instance profile role configured for ECR push and EKS access.</li><li>EKS node role configured for ECR pull.</li><li>Jenkins credentials: <code>sonarqube-token</code> and <code>postgres-db-password</code>.</li></ul></section>
+<section id="network"><h2>5. Network and security groups</h2><table><tr><th>Source</th><th>Destination</th><th>Port</th><th>Purpose</th></tr><tr><td>Admin IP/VPN</td><td>Jenkins EC2</td><td>8080/443</td><td>Jenkins UI</td></tr><tr><td>Jenkins SG</td><td>SonarQube SG</td><td>9000</td><td>Sonar analysis</td></tr><tr><td>Jenkins EC2</td><td>EKS API</td><td>443</td><td>kubectl</td></tr><tr><td>Jenkins / EKS nodes</td><td>AWS ECR endpoints</td><td>443</td><td>Push / pull images</td></tr></table><p>For a private EKS endpoint, Jenkins needs VPC routing. Restrict Jenkins/SonarQube ingress; never open them to the entire internet.</p></section>
+<section id="jenkins"><h2>6. Jenkins EC2 setup</h2><p>Install and verify Java, Jenkins, Git, Docker Engine + Buildx, AWS CLI v2, kubectl and SonarScanner.</p><pre><code>java -version
+git --version
+docker version
+docker buildx version
+aws --version
+kubectl version --client
+sonar-scanner --version
+aws sts get-caller-identity</code></pre><p>Attach a dedicated EC2 instance profile. Do not hardcode AWS keys in the Jenkinsfile.</p><p>Create Jenkins credentials:</p><table><tr><th>ID</th><th>Kind</th><th>Purpose</th></tr><tr><td>sonarqube-token</td><td>Secret text</td><td>SonarQube user token</td></tr><tr><td>postgres-db-password</td><td>Secret text</td><td>Demo DB password</td></tr></table></section>
+<section id="sonar"><h2>7. SonarQube EC2 setup</h2><ol><li>Install and start SonarQube.</li><li>Use its private DNS/IP in the Jenkinsfile's <code>SONAR_HOST_URL</code>.</li><li>Allow TCP 9000 from Jenkins EC2 security group only.</li><li>Create projects <code>voting-app-vote</code> and <code>voting-app-result</code>.</li><li>Generate a token and save it in Jenkins credentials.</li></ol><p>Worker .NET static analysis is not included in this starter pipeline.</p></section>
+<section id="iam"><h2>8. IAM and EKS access</h2><p>Jenkins EC2 role needs ECR authorization and push actions for the three repos, <code>eks:DescribeCluster</code>, and EKS access entry / policy or RBAC permissions to deploy into namespace <code>votingapp</code>. EKS node role needs ECR pull permissions.</p><pre><code>aws sts get-caller-identity
+aws eks describe-cluster --region ap-south-1 --name k8s-session
+aws eks update-kubeconfig --region ap-south-1 --name k8s-session
+kubectl get nodes
+kubectl auth can-i create deployments -n votingapp</code></pre><div class="warn">AWS authentication and Kubernetes authorization are separate. update-kubeconfig does not grant deployment permissions.</div></section>
+<section id="files"><h2>9. Project files</h2><pre><code>VotingApp-EKS-Jenkins-CICD/
+├── jenkins/Jenkinsfile
+├── kubernetes/eks/
+│   ├── 00-namespace.yaml
+│   ├── 01-postgres.yaml
+│   ├── 02-redis.yaml
+│   ├── 03-vote.yaml
+│   ├── 04-result.yaml
+│   └── 05-worker.yaml
+├── student/VotingApp-EKS-Student-Guide.html
+└── README.md</code></pre><p>Jenkins clones the app source into workspace folder <code>app/</code> and builds each component using its Dockerfile.</p></section>
+<section id="manual"><h2>10. Manual deployment to Kubernetes</h2><h3>Step 1 — Connect to EKS</h3><pre><code>export AWS_REGION=ap-south-1
+export EKS_CLUSTER_NAME=k8s-session
+aws sts get-caller-identity
+aws eks update-kubeconfig --region "$AWS_REGION" --name "$EKS_CLUSTER_NAME"
+kubectl config current-context
+kubectl get nodes -o wide</code></pre><h3>Step 2 — Create namespace</h3><pre><code>kubectl apply -f kubernetes/eks/00-namespace.yaml
+kubectl get ns votingapp</code></pre><h3>Step 3 — Create database Secret</h3><pre><code>read -s -p "PostgreSQL password: " POSTGRES_PASSWORD
+echo
+kubectl create secret generic db-credentials -n votingapp \
+  --from-literal=POSTGRES_USER=postgres \
+  --from-literal=POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+  --dry-run=client -o yaml | kubectl apply -f -
+unset POSTGRES_PASSWORD</code></pre><h3>Step 4 — Deploy data services</h3><pre><code>kubectl apply -f kubernetes/eks/01-postgres.yaml
+kubectl apply -f kubernetes/eks/02-redis.yaml
+kubectl rollout status deployment/postgres-deploy -n votingapp
+kubectl rollout status deployment/redis-deploy -n votingapp</code></pre><h3>Step 5 — Deploy application manifests</h3><p>Build/push the application images first. Jenkins updates the three application Deployments to ECR image tags after applying these files.</p><pre><code>kubectl apply -f kubernetes/eks/03-vote.yaml
+kubectl apply -f kubernetes/eks/04-result.yaml
+kubectl apply -f kubernetes/eks/05-worker.yaml
+kubectl get deploy,pods,svc -n votingapp</code></pre><div class="warn">The application image fields are placeholders. The Vote/Result/Worker pods become healthy only after Jenkins updates them to real ECR images.</div></section>
+<section id="pipeline"><h2>11. Jenkins pipeline stages</h2><table><tr><th>Stage</th><th>Purpose</th></tr><tr><td>Preflight</td><td>Check tools, AWS identity and SonarQube connectivity</td></tr><tr><td>Checkout</td><td>Clone upstream app source</td></tr><tr><td>Sonar Vote / Result</td><td>Static analysis and quality gate</td></tr><tr><td>Prepare ECR</td><td>Create repositories and authenticate Docker</td></tr><tr><td>Build & Push</td><td>Build AMD64/ARM64 images and publish immutable build tags</td></tr><tr><td>Configure EKS</td><td>Create a separate kubeconfig and verify nodes</td></tr><tr><td>Namespace & Secret</td><td>Apply namespace and create DB Secret from Jenkins credential</td></tr><tr><td>Deploy</td><td>Apply YAML and update image references</td></tr><tr><td>Verify</td><td>Wait for Deployments and list resources</td></tr></table></section>
+<section id="job"><h2>12. Create and run Jenkins job</h2><ol><li>Push this project folder to GitHub.</li><li>Create Jenkins Pipeline job <code>votingapp-eks-cicd</code>.</li><li>Choose Pipeline script from SCM → Git and enter the project repository.</li><li>Set Script Path to <code>jenkins/Jenkinsfile</code>.</li><li>Build with parameters: app repository <code>https://github.com/dockersamples/example-voting-app.git</code>, branch <code>main</code>.</li></ol><div class="good"><b>First build:</b> Set <code>DEPLOY_TO_EKS=false</code> to validate Sonar, build and ECR push. After verifying ECR images and cluster access, run again with <code>true</code>.</div></section>
+<section id="verify"><h2>13. Verify and access the application</h2><pre><code>kubectl get all -n votingapp
+kubectl get pods -o wide -n votingapp
+kubectl get endpoints -n votingapp</code></pre><p>Terminal 1 — Vote UI:</p><pre><code>kubectl port-forward -n votingapp svc/voting-service 8080:80</code></pre><p>Open <b>http://localhost:8080</b>.</p><p>Terminal 2 — Result UI:</p><pre><code>kubectl port-forward -n votingapp svc/result-service 8081:80</code></pre><p>Open <b>http://localhost:8081</b>. Keep both terminals running while testing.</p></section>
+<section id="trouble"><h2>14. Troubleshooting</h2><table><tr><th>Problem</th><th>Check</th></tr><tr><td>SonarQube unreachable</td><td>Private DNS, routing and TCP 9000 security-group rule</td></tr><tr><td>AWS AccessDenied</td><td>Instance profile and IAM policy</td></tr><tr><td>EKS forbidden</td><td>EKS access entry / Kubernetes RBAC</td></tr><tr><td>ECR push denied</td><td>GetAuthorizationToken and repository push permissions</td></tr><tr><td>ImagePullBackOff</td><td>Node role ECR pull, URI, tag and architecture</td></tr><tr><td>Secret not found</td><td>kubectl get secret db-credentials -n votingapp</td></tr><tr><td>Pod CrashLoopBackOff</td><td>kubectl logs, describe pod, app env variables</td></tr></table><pre><code>kubectl describe pod &lt;pod-name&gt; -n votingapp
+kubectl logs &lt;pod-name&gt; -n votingapp --all-containers
+kubectl get events -n votingapp --sort-by=.lastTimestamp</code></pre></section>
+<section id="cleanup"><h2>15. Cleanup and cost</h2><ul><li>Remove only the demo namespace when finished: <code>kubectl delete namespace votingapp</code>.</li><li>ECR repositories/images remain and may incur storage charges.</li><li>Do not terminate the Jenkins EC2, SonarQube EC2 or EKS cluster as part of app cleanup.</li><li>PostgreSQL uses ephemeral storage in this sample; data can be lost on Pod replacement.</li><li>No public LoadBalancer or Ingress is created. Those may provision billable AWS resources.</li></ul><div class="warn"><b>Training-only:</b> Harden secrets, persistent storage, TLS, RBAC, network policies, monitoring and backups before production use.</div></section>
+</main></div><footer>Voting App EKS CI/CD Student Guide · Sample environment: Jenkins EC2 + SonarQube EC2 + EKS k8s-session</footer>
+</body></html>

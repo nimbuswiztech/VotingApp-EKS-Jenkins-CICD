@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760">
+<rect width="1200" height="760" fill="#f7f9fc"/>
+<g font-family="Arial,sans-serif" text-anchor="middle">
+<rect x="60" y="50" width="220" height="90" rx="14" fill="#e8efff" stroke="#315b9a" stroke-width="2"/><text x="170" y="88" font-size="24" font-weight="bold">GitHub</text><text x="170" y="117" font-size="16">Source + Jenkinsfile</text>
+<rect x="410" y="50" width="330" height="110" rx="14" fill="#e8efff" stroke="#315b9a" stroke-width="2"/><text x="575" y="91" font-size="25" font-weight="bold">Jenkins EC2</text><text x="575" y="122" font-size="16">Scan · Buildx · AWS CLI · kubectl</text>
+<rect x="890" y="50" width="250" height="110" rx="14" fill="#e7f7ee" stroke="#168354" stroke-width="2"/><text x="1015" y="94" font-size="24" font-weight="bold">SonarQube EC2</text><text x="1015" y="124" font-size="16">Quality gate</text>
+<path d="M280 95H410 M740 105H890" stroke="#475569" stroke-width="3" fill="none"/>
+<rect x="410" y="235" width="330" height="100" rx="14" fill="#fff2d7" stroke="#b7791f" stroke-width="2"/><text x="575" y="275" font-size="25" font-weight="bold">Amazon ECR</text><text x="575" y="305" font-size="16">Vote · Result · Worker images</text><path d="M575 160V235" stroke="#475569" stroke-width="3"/>
+<rect x="90" y="415" width="1020" height="290" rx="18" fill="#edf4ff" stroke="#315b9a" stroke-width="3"/><text x="600" y="455" font-size="27" font-weight="bold">Amazon EKS · k8s-session · votingapp</text>
+<g fill="#e7f7ee" stroke="#168354" stroke-width="2"><rect x="135" y="510" width="160" height="115" rx="12"/><rect x="335" y="510" width="160" height="115" rx="12"/><rect x="535" y="510" width="160" height="115" rx="12"/><rect x="735" y="510" width="160" height="115" rx="12"/><rect x="935" y="510" width="130" height="115" rx="12"/></g>
+<g fill="#14532d"><text x="215" y="557" font-size="23" font-weight="bold">Vote</text><text x="415" y="557" font-size="23" font-weight="bold">Redis</text><text x="615" y="557" font-size="23" font-weight="bold">Worker</text><text x="815" y="557" font-size="23" font-weight="bold">PostgreSQL</text><text x="1000" y="557" font-size="23" font-weight="bold">Result</text></g>
+<path d="M295 568H335 M495 568H535 M695 568H735 M895 568H935 M575 335V415" stroke="#475569" stroke-width="3"/>
+<text x="600" y="670" font-size="16" fill="#334155">EKS worker nodes pull images from ECR using node IAM permissions</text></g></svg>
